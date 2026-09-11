@@ -1,0 +1,8 @@
+aiohttp>=3.9
+trafilatura>=1.8
+beautifulsoup4>=4.12
+lxml>=5.0
+pandas>=2.1
+pyarrow>=15.0
+duckdb>=0.10
+tqdm>=4.66

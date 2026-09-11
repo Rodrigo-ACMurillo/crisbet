@@ -1,0 +1,120 @@
+# Ciclo diario: capturar cuotas, emitir tickets, liquidar lo vencido y publicar.
+#
+# Dos detalles que no son cosméticos:
+#
+# 1. El LIBRO de tickets se guarda en caché y se restaura en cada ejecución. Sin
+#    eso, cada corrida empezaría con el libro vacío y el ROI real nunca se
+#    acumularía: el historial es justo lo único que puede validar el sistema.
+#    La caché de Actions caduca a los 7 días sin uso, así que además se sube como
+#    artefacto con retención larga.
+#
+# 2. La liquidación va DESPUÉS de emitir, porque resuelve tickets de días
+#    anteriores: los partidos de hoy todavía no han terminado.
+name: Tickets diarios
+
+on:
+  schedule:
+    # 11:00 UTC = 06:00 en Colombia. Antes de los partidos europeos de la tarde.
+    - cron: "0 11 * * *"
+  workflow_dispatch:
+    inputs:
+      cuota_objetivo:
+        description: "Cuota combinada objetivo"
+        default: "50"
+      tickets:
+        description: "Número de tickets"
+        default: "5"
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: tickets-diarios
+  cancel-in-progress: false
+
+jobs:
+  generar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Instalar dependencias
+        run: pip install --quiet -r requirements.txt
+
+      - name: Restaurar el libro de tickets
+        uses: actions/cache/restore@v4
+        with:
+          path: papel/libro
+          key: libro-${{ github.run_id }}
+          restore-keys: |
+            libro-
+
+      - name: Reconstruir el almacén de partidos
+        run: |
+          cd matchdata
+          python build.py --ligas E0 E1 SP1 I1 D1 F1 N1 P1 \
+            --desde 2019-20 --hasta 2025-26 --informe reports/build.json
+
+      - name: Capturar cuotas de Betplay
+        working-directory: betplay
+        run: python capturar.py --max-eventos ${{ vars.MAX_EVENTOS || 140 }}
+
+      - name: Emitir los tickets del día
+        working-directory: model
+        run: |
+          python selector.py \
+            --cuota-objetivo ${{ github.event.inputs.cuota_objetivo || 50 }} \
+            --tickets ${{ github.event.inputs.tickets || 5 }}
+
+      - name: Anotar en el libro
+        working-directory: papel
+        run: python registro.py anotar
+
+      - name: Liquidar los tickets vencidos
+        working-directory: papel
+        env:
+          FOOTBALL_DATA_TOKEN: ${{ secrets.FOOTBALL_DATA_TOKEN }}
+        run: python registro.py liquidar
+
+      - name: Generar imágenes y sitio
+        run: |
+          cd papel && python imagen.py && cd ..
+          cd web && python generar_sitio.py --salida ../_sitio
+          cp -r ../papel/tickets_png ../_sitio/ 2>/dev/null || true
+
+      - name: Guardar el libro (caché)
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: papel/libro
+          key: libro-${{ github.run_id }}
+
+      - name: Guardar el libro (artefacto duradero)
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: libro-tickets
+          path: papel/libro
+          retention-days: 90
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _sitio
+
+  publicar:
+    needs: generar
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.despliegue.outputs.page_url }}
+    steps:
+      - id: despliegue
+        uses: actions/deploy-pages@v4

@@ -1,0 +1,27 @@
+# Credenciales — nunca al repositorio
+.env
+.env.*
+*.key
+*.pem
+
+# Datos y artefactos generados
+**/warehouse/
+**/predicciones/
+**/reports/
+**/cache_csv/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.parquet
+*.jsonl
+__pycache__/
+*.pyc
+
+# Sitio e imágenes generadas (las produce el workflow)
+_sitio/
+**/tickets_png/
+**/libro/
+
+# Datasets del crawler (198 MB)
+crawler/dataset*.jsonl
+crawler/*.sqlite

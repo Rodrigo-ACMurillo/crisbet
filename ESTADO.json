@@ -1,0 +1,352 @@
+{
+  "_lee_esto_primero": "Estado del proyecto Crisbet. Una sesion nueva de Claude debe leer SOLO este fichero (y el README del sprint activo) para continuar. No hace falta leer todo el proyecto.",
+  "proyecto": "Crisbet — agente de analisis de futbol y generacion de tickets de apuestas",
+  "raiz": "L:/crisbet",
+  "actualizado": "2026-09-12",
+  "plan": "docs/PLAN_SPRINTS.md",
+  "sprint_actual": "despliegue-web",
+  "sprint_actual_estado": "montado y validado en local; falta el sondeo desde GitHub Actions",
+  "siguiente_paso": "ORDEN CONCRETO PARA PUBLICAR: (1) crear el repo en GitHub y hacer el primer push (el indice ya esta preparado, 69 ficheros y 615 KB, sin .env); (2) anadir FOOTBALL_DATA_TOKEN en Settings > Secrets and variables > Actions; (3) Settings > Pages > Source: GitHub Actions; (4) lanzar A MANO el workflow \"Sondeo del feed\" desde la pestana Actions — si falla, la captura no puede correr en GitHub y hay que moverla al PC o a un VPS en Colombia; (5) solo si el sondeo pasa, dejar que el cron diario haga el resto. PENDIENTE APARTE: el usuario debe cambiar la contrasena de Betplay (estuvo en texto plano) y rotar el token de football-data.org (se pego en el chat).",
+  "sprints": {
+    "0": {
+      "estado": "pendiente",
+      "titulo": "Validacion legal y baseline",
+      "nota": "No ejecutado. Bloquea la decision de negocio, no el codigo."
+    },
+    "1": {
+      "estado": "completado",
+      "titulo": "Pipeline de descubrimiento de fuentes",
+      "ruta": "crawler/"
+    },
+    "2": {
+      "estado": "completado",
+      "titulo": "Ingesta de contenido y extraccion estructurada",
+      "ruta": "extractor/"
+    },
+    "3": {
+      "estado": "completado",
+      "titulo": "Datos de partido canonicos y feature store",
+      "ruta": "matchdata/"
+    },
+    "4": {
+      "estado": "completado con resultado negativo",
+      "titulo": "Modelo de probabilidad",
+      "ruta": "model/",
+      "nota": "Implementado y medido correctamente. El modelo funciona; lo que no hay es edge sobre el mercado."
+    },
+    "5": {
+      "estado": "desbloqueado con condiciones",
+      "titulo": "Selector de value, staking y backtest (GO/NO-GO)",
+      "nota": "Ver siguiente_paso: el protocolo no es opcional; sin el, el backtest sale optimista por construccion."
+    },
+    "6": {
+      "estado": "pendiente",
+      "titulo": "Agente autonomo y orquestacion"
+    },
+    "7": {
+      "estado": "pendiente",
+      "titulo": "Bot de Telegram"
+    },
+    "8": {
+      "estado": "pendiente",
+      "titulo": "Memoria y aprendizaje continuo"
+    },
+    "9": {
+      "estado": "pendiente",
+      "titulo": "Observabilidad, riesgo y cumplimiento"
+    },
+    "10": {
+      "estado": "pendiente",
+      "titulo": "Paper trading, piloto y escala"
+    },
+    "4b": {
+      "estado": "completado",
+      "titulo": "El mercado como punto de partida (modelo residual)",
+      "ruta": "model/"
+    },
+    "4c": {
+      "estado": "completado",
+      "titulo": "Correlacion dentro del partido: el edge estructural del combinado",
+      "ruta": "model/correlacion.py"
+    }
+  },
+  "componentes": {
+    "crawler/": {
+      "proposito": "URLs de futbol reales, clasificadas y deduplicadas -> JSONL",
+      "modulos": {
+        "main.py": "orquestador CLI; cupo por dominio y cancelacion al llegar al objetivo",
+        "ingest.py": "robots.txt -> sitemaps -> RSS -> Common Crawl",
+        "classify.py": "URL -> (category, subcategory)",
+        "normalize.py": "canonicalizacion de URL + dedup SHA-256 en SQLite/WAL",
+        "writer.py": "JSONL en streaming / JSON particionado",
+        "seeds.py": "56 dominios semilla de Europa y Latinoamerica"
+      },
+      "comando": "python main.py --target 4000 --out dataset.jsonl"
+    },
+    "extractor/": {
+      "proposito": "URLs -> HTML -> hechos con procedencia -> Parquet/DuckDB",
+      "modulos": {
+        "pipeline.py": "orquestador CLI del sprint; muestreo estratificado por dominio",
+        "fetcher.py": "robots.txt, rate-limit por host, reintentos con backoff",
+        "httpcache.py": "cache condicional ETag/Last-Modified en SQLite",
+        "extract.py": "texto (trafilatura/bs4) y tablas (pandas/lxml); FBref y Understat",
+        "facts.py": "esquema Fact + validacion de procedencia (capa anti-alucinacion)",
+        "store.py": "Parquet particionado por fecha + vistas DuckDB (facts, facts_raw)",
+        "query.py": "consultas de comprobacion",
+        "test_offline.py": "24 comprobaciones sin red"
+      },
+      "comando": "python pipeline.py --dataset ../crawler/dataset.jsonl --limit 120 --concurrency 12"
+    },
+    "matchdata/": {
+      "proposito": "Verdad numerica: partidos canonicos, cuotas de cierre y feature store punto-en-el-tiempo",
+      "modulos": {
+        "providers.py": "interfaz MatchProvider; FootballDataUK (viva) y ApiFootball (declarada, sin credenciales)",
+        "canonical.py": "Match, OddsCierre, slug canonico de equipo con alias, match_id determinista",
+        "features.py": "features punto-en-el-tiempo; leer el pasado y solo despues actualizar",
+        "build.py": "CLI: descarga -> parquet particionado por temporada + informe de mercado",
+        "verify.py": "senal, calibracion y alarma de fuga sobre el almacen real",
+        "test_leakage.py": "34 comprobaciones anti-fuga, sin red"
+      },
+      "comando": "python build.py --ligas E0 E1 SP1 I1 D1 F1 N1 P1 --desde 2015-16 --hasta 2024-25"
+    },
+    "model/": {
+      "proposito": "Probabilidades calibradas 1X2 y comparacion honesta contra la cuota de cierre",
+      "modulos": {
+        "dixon_coles.py": "Poisson bivariante + correccion de marcadores bajos + decaimiento temporal. partidos_de_primera_parte() reetiqueta con goles al descanso: mismo modelo, mercados de 1a parte",
+        "gbm.py": "LightGBM multiclase sobre las features del Sprint 3",
+        "calibration.py": "isotonica por clase CON control (solo se aplica si mejora) + ensamblado ponderado",
+        "walkforward.py": "folds por temporada, corte por kickoff, verificacion de integridad temporal",
+        "metrics.py": "Brier (dos convenciones), log-loss, ECE, curva de calibracion",
+        "train.py": "orquesta el walk-forward y exporta las predicciones por partido",
+        "diagnostico.py": "busca edge por tramo de cuota, por liga y en las discrepancias con el mercado",
+        "test_model.py": "47 comprobaciones sin red",
+        "mercado_modelo.py": "GBMResidual (mercado como init_score: arranca EN el mercado) y GBMConMercado (mercado como feature)",
+        "train_mercado.py": "walk-forward de la via residual + prueba de discrepancias multiumbral",
+        "valor_potencial.py": "ROI con cuotas reales por umbral + robustez (Bonferroni, concentracion temporal y de premios)",
+        "correlacion.py": "mide lift = P(A y B)/(P(A)P(B)) entre mercados del mismo partido; el edge del combinado no depende de predecir mejor",
+        "mercados.py": "TODOS los mercados derivados de una matriz de marcadores: 1X2, doble oportunidad, sin empate, totales, totales por equipo, handicap asiatico (con lineas de cuarto y devolucion), handicap 3-way, BTTS, resultado correcto. Mas MercadoDeConteo para corners/tarjetas",
+        "jugadores.py": "modelo de goleador (parte del pastel del equipo x lambda del equipo) + diagnostico honesto de cobertura de datos",
+        "test_mercados.py": "63 comprobaciones, con enfasis en lineas asiaticas (donde un error no lanza excepcion, solo infla el EV)",
+        "emparejar.py": "empareja nombres de equipo de Betplay con los slugs del modelo. Conservador: ante duda no empareja (91.7% de acierto)",
+        "selector.py": "cruza catalogo del modelo con cuotas de Betplay, calcula EV por pata y arma combinados de PARTIDOS DISTINTOS",
+        "test_selector.py": "29 comprobaciones, 4 de ellas regresiones de bugs silenciosos"
+      },
+      "comando": "python train.py   (8 ligas, ~12 min)  |  python train.py --ligas E0  (~1 min)"
+    },
+    "betplay/": {
+      "proposito": "Captura diaria del feed de cuotas de Betplay (Kambi) y acumulacion del historico que no existe gratis",
+      "modulos": {
+        "kambi.py": "cliente del feed: rate-limit 1 req/s (suelo 0.5), reintentos con backoff, endpoints group/listView/betoffer. SIN CREDENCIALES",
+        "esquema.py": "JSON de Kambi -> filas con procedencia. Cuotas en milesimas -> decimal. eventParticipantId distingue jugador de equipo",
+        "capturar.py": "CLI de captura -> almacen/{eventos,cuotas,prepacks}/fecha_captura=.../ (append-only)",
+        "analizar.py": "coste de combinar (prepack vs producto de patas), margen por mercado, movimiento de linea",
+        "test_betplay.py": "40 comprobaciones sin red, incluida una que falla si alguien mete credenciales en el cliente"
+      },
+      "comando": "python capturar.py  |  python analizar.py  |  python test_betplay.py"
+    },
+    "papel/": {
+      "proposito": "Libro de tickets en papel: registrar lo emitido y liquidarlo con resultados reales. Es lo unico que puede validar el selector",
+      "modulos": {
+        "liquidacion.py": "logica pura: (ganado, devuelto) de cada pata. Cinco desenlaces, no dos. Sin red",
+        "resultados.py": "marcadores desde football-data.org, con el descanso (necesario para los mercados de 1a parte)",
+        "registro.py": "anotar / liquidar / resumen. Idempotente: el id del ticket sale de su contenido",
+        "test_liquidacion.py": "48 comprobaciones exhaustivas",
+        "imagen.py": "genera un PNG por ticket con formato de boleto. El alto se DERIVA del contenido en las mismas unidades en que se dibuja: calcularlo a ojo dejaba fuera del lienzo el aviso de riesgo, que no es opcional. La probabilidad real va en el encabezado al lado de la cuota, no en letra pequena."
+      },
+      "comando": "python registro.py anotar | liquidar | resumen"
+    },
+    "diario.py": {
+      "proposito": "El bucle diario completo del agente: capturar -> emitir -> anotar -> liquidar -> resumen",
+      "comando": "python diario.py  (o --solo capturar|emitir|anotar|liquidar)",
+      "nota": "NO apuesta dinero: escribe tickets en un fichero. La liquidacion va al final porque los partidos de hoy aun no han terminado."
+    }
+  },
+  "decisiones_vigentes": [
+    "Canal: Telegram, no WhatsApp (Bot API gratuita, sin plantillas ni ventana de 24h).",
+    "El LLM nunca produce una probabilidad, una cuota ni un stake: solo extrae y redacta.",
+    "Un hecho sin source_url + extracted_at + raw_snippet no entra al almacen. Sin excepciones.",
+    "Objetivo realista: 56-62% de acierto, ROI +3% a +8%. Nada de '98% de acierto'.",
+    "Sprint 5 es GO/NO-GO: sin ROI > 0 con comision sobre >=1000 apuestas, no se pasa a dinero real.",
+    "El crawl de noticias es contexto; la verdad numerica sale de matchdata/ (hoy football-data.co.uk, manana API de pago).",
+    "Objetivo de Brier corregido a < 0.1917 (medio por clase): el < 0.21 original era mas flojo que el propio mercado. Cuidado con la convencion: la suma multiclase equivalente es 0.575.",
+    "Fuente de verdad provisional: football-data.co.uk tras la interfaz MatchProvider. API-Football entra sin tocar el feature store ni las pruebas.",
+    "Ninguna feature se inventa para rellenar un hueco: lo que no da el proveedor se declara ausente.",
+    "El criterio del modelo no es acertar mas partidos sino batir el Brier de la cuota de cierre en el mismo conjunto. Medido: no lo bate.",
+    "Prohibido ajustar hiperparametros hasta que el numero salga: con 20.603 partidos, buscar hasta batir 0.19233 produciria un ganador por azar, no un edge.",
+    "La cuota del mercado entra como init_score, no como feature: meterla como una feature mas empeora el resultado (0.19312 frente a 0.19233).",
+    "Todo ROI positivo se reporta con su n, su intervalo de confianza y corregido por el numero de reglas examinadas. Un ROI sin eso no es un resultado.",
+    "El combinado multiplica el EV de sus patas: no crea ventaja, amplifica la que haya. Por eso la calidad de cada pata es TODO el juego, y un combinado de patas malas es peor que una apuesta simple mala.",
+    "Entre partidos distintos las patas SI son independientes y la casa acierta al multiplicar: ahi no hay edge por correlacion. El edge estructural vive solo dentro de un mismo partido."
+  ],
+  "verificado_en_ejecucion": {
+    "sprint_1": "4000 URLs sobre 16 dominios, 0 duplicados, 8,9 s para 300 URLs",
+    "sprint_2": "120 paginas -> 113 descargadas, 7 bloqueadas por robots.txt, 60 con hechos, procedencia 100%, 46 respuestas 304 en la segunda pasada",
+    "pruebas": "extractor/test_offline.py -> 24/24 | matchdata/test_leakage.py -> 34/34 | model/test_model.py -> 47/47",
+    "sprint_3": "29.577 partidos (8 ligas, 2015-2025), 205.656 lineas de cuota de cierre, 240 equipos, 42 features sin ninguna vacia, 97,3% de filas con historial suficiente. Benchmark: Pinnacle al cierre acierta 53,3% con Brier 0,1917. Elo: Brier 0,1589 frente a 0,1829 de la tasa base (13,2% mejor). Sin indicios de fuga.",
+    "sprint_4": "Walk-forward: 20.603 partidos, 7 folds (2018-19 a 2024-25), 8 ligas, 0 violaciones temporales. Brier medio por clase: mercado 0.19233 | ensamble 0.19698 | gbm 0.19734 | dixon_coles 0.19925. Pesos del ensamble 0.498/0.502. La calibracion isotonica se rechazo sola en los 7 folds (no mejoraba en control). Diagnostico: el mercado gana en las 8 ligas, en los 6 tramos de cuota y en los 6 cortes de discrepancia. Sin veta.",
+    "sprint_4b": "Residual: Brier 0.19228 frente a 0.19233 del mercado (empate; el Sprint 4 perdia por 0.0047). gbm_con_mercado 0.19312: la cuota como feature mas EMPEORA al mercado; como init_score, no. Discrepancias: el modelo acierta en los 6 cortes (en el Sprint 4 acertaba el mercado en los 6). Con cuotas reales: exceso>=0.03 da n=541, ROI +11.23%, IC95 [+1.7,+20.8], pero z=2.30 frente al 2.89 exigido tras corregir por 13 reglas; 76% de las apuestas en una temporada; 10 premios = 49% del beneficio. Indicio, no prueba.",
+    "sprint_4c": "Sobre 28.350 partidos: 48 de 55 pares de mercados del mismo partido tienen correlacion significativa (z>3). Ejemplos: gana_local + local_marca_2+ lift=1.78 (z=53); btts + over_2.5 lift=1.49 (z=46); gana_visitante + visitante_4+_tiros_puerta lift=1.46 (z=30). Aritmetica del combinado: el EV se MULTIPLICA. Con patas al -4% (lo medido en 1X2), 5 patas dan -18.7%; con patas al +1.4%, 5 patas dan +7.2%. El combinado amplifica el signo, no lo crea.",
+    "sprint_4d": "Feed de Betplay/Kambi localizado y funcionando. El edge por correlacion ingenua NO existe en Betplay: su Bet Builder modela la correlacion y ademas cobra ~21% extra por combinar. Conclusion para el producto: los combinados del mismo partido via Bet Builder tienen EV muy negativo; los de partidos distintos multiplican correctamente y el EV es el producto de los EV de las patas. En ambos casos hace falta edge REAL en la pata individual.",
+    "captura_betplay": "Primera captura 2026-09-11: 8 partidos de Liga BetPlay -> 2.101 lineas, 125 mercados, 566 de jugador (267 jugadores), 129 combinados del Bet Builder. 10 peticiones, 0 errores, 1.2 MB. COSTE DE COMBINAR con n=129 (antes n=1): ratio mediano cuota/producto 0.68; 73% por debajo del producto. Por patas: 2 patas 0.73 | 3 patas 1.00 | 4 patas 0.57. Confirma que Betplay modela la correlacion. MARGEN POR MERCADO: Handicap 3-Way 13.61%, Total asiatico 9.22%, Corners 9.14% (Pinnacle cobra 2.67% en 1X2). MERCADOS DE JUGADOR en Liga BetPlay: Anotara, Anotador del primer gol, Marca al menos 2/3 goles. NO hay tiros a puerta.",
+    "cobertura_mercados": "Medido contra la captura real de Betplay (2.101 lineas): cobertura del 4.6% al 72.0%. En patas de cuota 2.0-4.0 (las utiles para combinados de 25-100): del 8.2% al 83.6%. Desglose: matriz de marcadores (completo y 1a parte) 62.1%, corners 9.9%, jugador 25.8% (bloqueado), sin cubrir 2.2%. Dixon-Coles de primera parte converge: 1.21 goles/partido frente a 2.75 del completo. Pruebas: model/test_mercados.py 63/63, model/test_model.py 47/47.",
+    "captura_multiliga": "Captura de 140 partidos en 21 competiciones (Premier, LaLiga, Serie A, Bundesliga, Ligue 1, Eredivisie, Primeira, Brasileirao, Championship, League One/Two, LaLiga2, Serie B, Liga MX, MLS, Argentina x2, Peru, Paraguay, Suecia, Belgica, Colombia): 57.578 lineas, 2.651 mercados distintos, 20.901 lineas de jugador, 3.047 jugadores. 164 peticiones, 0 errores, 33.9 MB. De las lineas de jugador, 16.808 (80.4%) estan en ligas con datos de goleador GRATUITOS.",
+    "selector": "Sobre 140 partidos capturados: 41 valorados (48 en ligas conocidas, 91.7% de equipos emparejados). 4.927 lineas de partido completo valoradas: EV medio -19.6%, mediano -14.1%, solo 24.1% con EV positivo, modelo por debajo de la casa en los 5 tramos de probabilidad (coherente: las cuotas de la casa llevan margen). Con el guardarrail de desvio maximo del 6%: 291 patas candidatas y tickets de cuota ~50 con probabilidad real del 2.5-4.4% y patas de EV 10-21%. Pruebas: test_selector 29, test_mercados 82, test_model 53.",
+    "paper_trading": "Liquidacion verificada contra un partido real (Liverpool 2-2 Nottingham Forest, descanso 0-1): 1X2 \"1\" PIERDE, over 2.5 GANA, menos de 1.5 en 1a parte GANA, asiatico -0.5 PIERDE, BTTS si GANA. Todo correcto. Libro idempotente: re-anotar los mismos 5 tickets registra 0. test_liquidacion.py 48/48. diario.py ejecuta las 4 etapas y deja informe en reports/diario.json."
+  },
+  "problemas_corregidos": [
+    "crawler/main.py: al alcanzar el objetivo no cancelaba las tareas pendientes; el proceso quedaba colgado y moria antes de vaciar el buffer (fichero de salida vacio). Corregido con un vigilante que cancela.",
+    "crawler/main.py: sin cupo por dominio, un sitemap grande monopolizaba el objetivo (4000 URLs de un solo dominio). Corregido con reparto justo + segunda pasada sin cupo.",
+    "extractor/extract.py: pandas >= 2.1 exige io.StringIO en read_html; devolvia 0 tablas.",
+    "extractor/pipeline.py: --limit leia las N primeras lineas, todas del mismo dominio. Corregido con muestreo estratificado.",
+    "extractor/store.py: el almacen es append-only y reejecutar duplicaba filas. La vista facts deduplica por fact_id.",
+    "matchdata/features.py: elo_prob_local era en realidad la puntuacion esperada del Elo (victoria=1, empate=0.5), no P(victoria). Medida contra \"gana o no gana\" salia sobrestimada 10-18 puntos en todos los tramos y parecia una fuga. Renombrada a elo_expectativa_local y anadida la etiqueta y_puntuacion_local.",
+    "matchdata/build.py: el Brier se reportaba sin decir la convencion. Ahora se dan las dos (suma multiclase 0.575 y medio por clase 0.1917); confundirlas invalidaria el go/no-go del Sprint 5.",
+    "model/calibration.py: la isotonica se aplicaba a ciegas y EMPEORABA el modelo (Brier 0.1972 frente a 0.1932, ECE casi triplicado). Anadido fit_con_control: se ajusta con media validacion y solo se acepta si mejora en la otra media. En la corrida final se rechazo en los 7 folds.",
+    "model/train.py: no guardaba las predicciones por partido, asi que el Sprint 5 habria tenido que reentrenar los 7 folds solo para hacer el backtest. Ahora exporta predicciones/walkforward.parquet con las probabilidades de los 4 modelos y del mercado.",
+    "model/train_mercado.py: la prueba de discrepancias con un solo umbral de 0.05 se quedaba sin muestra (80 casos de 88.700) porque un modelo anclado al mercado casi nunca se aparta tanto, y \"no concluye nada\" se leia como \"no hay senal\". Corregido con varios umbrales: a 0.02 hay 3.566 casos y la senal aparece.",
+    "model/valor_potencial.py: el primer calculo daba +11.23% de ROI y lo declaraba significativo. Faltaba corregir por los 13 umbrales examinados y comprobar concentracion temporal y de premios. Con esas pruebas el hallazgo baja a indicio.",
+    "model/correlacion.py: el primer calculo daba EV de +395% porque asumia que la casa paga el producto de probabilidades JUSTAS, sin margen. Anadido margen por pata (5%) y reetiquetado como \"techo teorico\" con el supuesto explicito. Aun corregido, el ejemplo de 4 patas da +307% porque esas patas se solapan casi por completo (gana_local + local_marca_2+ + local_6+_tiros_puerta son casi el mismo suceso): ningun operador cotiza eso por independencia.",
+    "betplay/esquema.py: se marcaba como linea de jugador cualquier outcome con campo \"participant\", pero ese campo trae tambien el nombre del EQUIPO (en Resultado Final, handicaps...). Contaba 960 lineas de jugador donde habia 566. El discriminador correcto es eventParticipantId, que solo aparece en mercados de jugador.",
+    "model/mercados.py: las lineas asiaticas no son binarias. Tienen devolucion (empate con handicap) y las de cuarto (-0.25, +0.75) se parten en dos medias apuestas. Tratarlas como un over/under normal no lanza ningun error: solo produce probabilidades mal calculadas y un EV inventado. Resuelto con prob_gana/prob_pierde/prob_empate separadas y prob_efectiva para comparar contra la cuota.",
+    "model/jugadores.py y betplay/capturar.py: liga_key NO es unico en el feed de Kambi. \"premier_league\" identifica la Premier inglesa Y las Premier Ligas de Rusia, Ucrania, Kazajistan y Jordania; \"bundesliga\" vale para Alemania y Austria. Mapear solo por la clave habria aplicado las tasas de gol de la Premier inglesa a jugadores jordanos sin lanzar ningun error: numeros plausibles y falsos. Corregido: la clave es (pais, liga_key), con el pais normalizado sin tildes. Hay prueba dedicada (test_clave_de_liga_no_es_solo_la_clave).",
+    "model/selector.py: \"1.a parte\" (el ordinal femenino que NFKD convierte en \"a\") no casaba con la deteccion de periodo, asi que los mercados de media parte se valoraban con el modelo del partido completo. \"Mas de 0.5 goles\" pasaba de ~0.50 a ~0.86 de probabilidad y generaba EV del +183%.",
+    "model/selector.py: en el handicap asiatico cada seleccion trae su PROPIO signo desde la perspectiva de su equipo; se pasaba la misma linea a los dos lados. El visitante salia con 96% de probabilidad y EV del +260%.",
+    "model/selector.py: el equipo de los mercados \"Total de goles de X\" se leia del nombre CRUDO, asi que en \"Total de goles de Real Madrid - 1a parte\" quedaba \"real madrid - 1a parte\", nunca coincidia con el local y la linea se asignaba al VISITANTE. Todos los mercados de media parte valoraban al equipo contrario (EV +182%).",
+    "Los tres bugs compartian lo mismo: NO lanzaban ningun error. Producian tickets con aspecto inmejorable y aritmetica rota. Estan fijados como regresiones en model/test_selector.py.",
+    "papel/liquidacion.py: los mercados \"Total de goles de X\" se liquidaban contra el visitante cuando no se sabia el lado, en vez de quedar sin liquidar. Habria falseado el ROI de forma sistematica, que es justo lo que el paper trading debe medir.",
+    "papel/imagen.py: el alto de la figura se calculaba a ojo y el aviso de riesgo con la linea de juego responsable quedaba fuera del PNG. La ficha se veia perfecta y le faltaba justo lo obligatorio.",
+    "papel/imagen.py: las patas mostraban \"Handicap: 1 -1.5\" en vez del nombre del equipo, obligando a recordar quien era el local. Y el signo se anadia tambien a los totales (\"Menos de +1.5\"), donde no significa nada.",
+    "El proyecto no era un repositorio git y el .env con la contrasena de Betplay estaba en texto plano sin .gitignore. Ahora .gitignore excluye .env, los datos generados y los 198 MB del crawler; verificado que .env NO entra en el indice."
+  ],
+  "limitaciones_conocidas": [
+    "js_rendered: sitios SPA (flashscore.com, abola.pt) no entregan texto sin navegador headless. Anotado, no resuelto: en el Sprint 3 dejan de ser fuente de verdad.",
+    "Sprint 0 sin ejecutar: falta el dictamen legal de Coljuegos y el baseline Dixon-Coles.",
+    "Sin API de pago: xG es un proxy (tiros a puerta x 0.32). Faltan ausencias confirmadas, clima, viaje y arbitro como feature. La interfaz ApiFootball esta lista para recibirlos.",
+    "La calibracion del Elo muestra sobreconfianza simetrica (+0.08 abajo, -0.06 arriba). Es esperable sin modelo de empate; lo corrige la calibracion isotonica del Sprint 4.",
+    "La expectativa Elo no es P(1)/P(X)/P(2). Convertirla es tarea del Sprint 4.",
+    "EL HALLAZGO CENTRAL DEL SPRINT 4: el modelo no bate al mercado en ningun corte. La prueba de discrepancias (model/diagnostico.py) muestra que cuando el modelo sube 8 puntos sobre el mercado, la frecuencia real se queda donde decia el mercado (0.283 frente al 0.405 del modelo y el 0.288 del mercado). No hay nicho donde buscar value.",
+    "Ajustar Dixon-Coles con 240 equipos cuesta ~12 min por corrida completa: L-BFGS-B aproxima el gradiente por diferencias finitas (483 evaluaciones por paso). El gradiente analitico lo reduciria un orden de magnitud; importara en el Sprint 8, que reentrena cada semana.",
+    "El GBM entrena un unico modelo global para las 8 ligas; no se ha medido si un modelo por liga seria mejor.",
+    "RESTRICCION OPERATIVA del Sprint 4b: el modelo residual se ancla a la cuota de CIERRE, asi que solo puede operar en el instante previo al pitido y a un precio peor que horas antes. El Sprint 5 debe medir con cuotas de apertura o penalizar el cierre; si no, el ROI simulado sera optimista por construccion.",
+    "El ROI positivo (+11.23% con exceso>=0.03) NO sobrevive a la correccion de Bonferroni (z=2.30 frente a 2.89) y depende en un 76% de la temporada 2024-25. No usar como base para arriesgar dinero.",
+    "FUENTES DE DATOS DE JUGADOR CERRADAS (verificado 2026-09-11): Understat ya no sirve shotsData en el HTML (el extractor del Sprint 2 quedo obsoleto en esa parte); FBref devuelve 403. StatsBomb open-data si responde y tiene el disparo de cada jugador, pero con cobertura limitada de competiciones y temporadas.",
+    "NO EXISTE HISTORICO GRATUITO DE CUOTAS DE PROPS (tiros de jugador, tarjetas). Sin el no se puede medir si el modelo bate esas lineas. Es el bloqueo real para el producto de combinados con props.",
+    "El edge por correlacion es un hecho sobre el futbol, no sobre el modelo, pero solo es dinero si el operador cotiza el combinado multiplicando patas del mismo partido como si fueran independientes. Los operadores modernos recotizan o rechazan esos combinados. Verificarlo es trabajo de campo sobre Betplay/Wplay/Rushbet, no analisis historico.",
+    "CERRADA la via del edge por correlacion en Betplay: su Bet Builder recotiza por correlacion y cobra ~21% extra sobre la cuota justa. No hay regalo por combinar patas del mismo partido en este operador.",
+    "El movimiento de linea exige mas de una captura y NO se puede reconstruir hacia atras. Con captura diaria haran falta semanas antes de poder afirmar nada solido sobre que lineas de Betplay estan flojas. No hay atajo.",
+    "EL SELECTOR NO ESTA VALIDADO COMO RENTABLE. Ordenar patas por EV selecciona, por construccion, las lineas donde el modelo mas se aparta del mercado — y el Sprint 4 midio que esas discrepancias son errores del modelo. Por eso hay un guardarrail (--desvio-maximo, 6% por defecto) que descarta la cola donde el modelo delira, apoyado en el hallazgo del Sprint 4b de que las desviaciones PEQUENAS (~2 puntos) si apuntaban en la direccion correcta. Aun asi, el EV que reporta el selector es una hipotesis, no un resultado medido.",
+    "Equipos recien ascendidos (Wrexham, Alverca, Academico Viseu, Racing Santander) no existen en el historico y quedan sin emparejar: sus partidos no se valoran. Es lo correcto, pero reduce el catalogo.",
+    "No hay modelo de segunda parte: esos mercados se descartan explicitamente."
+  ],
+  "dependencias_instaladas": [
+    "aiohttp",
+    "beautifulsoup4",
+    "duckdb",
+    "lightgbm",
+    "lxml",
+    "orjson",
+    "pandas",
+    "pyarrow",
+    "scikit-learn",
+    "scipy",
+    "tqdm",
+    "trafilatura"
+  ],
+  "artefactos": {
+    "dataset_urls": "crawler/dataset_sprint2_seed.jsonl",
+    "almacen": "extractor/warehouse/facts/partition_date=YYYY-MM-DD/*.parquet",
+    "duckdb": "extractor/warehouse/crisbet.duckdb",
+    "cache_http": "extractor/http_cache.sqlite",
+    "informes": "extractor/reports/*.json",
+    "partidos_canonicos": "matchdata/warehouse/matches/temporada=YYYY-YY/*.parquet",
+    "cuotas_cierre": "matchdata/warehouse/odds/temporada=YYYY-YY/*.parquet",
+    "feature_store": "matchdata/warehouse/features/temporada=YYYY-YY/*.parquet",
+    "cache_csv": "matchdata/cache_csv/",
+    "informes_sprint3": "matchdata/reports/sprint3_*.json",
+    "predicciones_walkforward": "model/predicciones/walkforward.parquet (20.603 filas, 4 modelos + mercado)",
+    "informes_sprint4": "model/reports/sprint4_todas.json, model/reports/sprint4_diagnostico.json",
+    "predicciones_residual": "model/predicciones/residual_mercado.parquet",
+    "informes_sprint4b": "model/reports/sprint4b_mercado.json, model/reports/sprint4b_valor.json",
+    "informe_correlacion": "model/reports/correlacion_combinados.json"
+  },
+  "git": "El proyecto NO es un repositorio git todavia.",
+  "vias_abiertas_sprint4": [
+    "1. Alineaciones confirmadas y bajas (se publican 1h antes y mueven la cuota). El modelo compite a ciegas contra un mercado que si las conoce. Exige la API de pago. Es la via mas prometedora.",
+    "2. Usar la probabilidad implicita de la cuota como FEATURE y aprender a corregirla, en vez de predecir desde cero. Problema mucho mas facil; el riesgo es quedarse pegado al mercado, y se mide con la misma prueba de discrepancias.",
+    "3. Mercados menos eficientes: el margen de Pinnacle en 1X2 es del 2.67%, de los mas afinados que existen. Corners, tarjetas, ligas menores y mercados de jugador tienen mas margen y menos volumen profesional.",
+    "4. xG real en lugar del proxy por tiros a puerta. Ayuda, pero por si solo no cierra una brecha de 0.0047."
+  ],
+  "objetivo_del_producto": "CORRECCION IMPORTANTE DE RUMBO (el usuario lo aclaro el 2026-09-11): el producto NO es batir la cuota de cierre en 1X2 ni ir a la par del mercado. Es emitir 2-5 tickets diarios de CUOTA COMBINADA ALTA (25, 50 o 100), asumiendo que se pueden perder, y combinando mercados variados: tiros de jugador, corners, goles, no solo 1X2. Todo analisis anterior anclado a \"batir el Brier del mercado\" media el criterio equivocado.",
+  "operador": {
+    "nombre": "Betplay (Colombia)",
+    "plataforma": "Kambi (white-label). Confirmado en el bundle: client-static.bc.kambicdn.com/client/betplay/kambi-bootstrap.js",
+    "marca_kambi": "betplay",
+    "acepta_combinados_mismo_partido": "SI, via Bet Builder (prePacks). MEDIDO: Betplay NO multiplica ingenuamente. Ratio ofrecida/producto en 10 combinados: media 0.893, rango 0.42-1.34. Recorta en patas positivamente correlacionadas (0.42-0.68) y paga por encima del producto en las que se estorban (1.16-1.34): firma inequivoca de un modelo de correlacion.",
+    "robots_txt": "Allow: / — solo bloquea /admin/ y /tag/. El rastreo de paginas publicas esta permitido.",
+    "credenciales": "NO SE USAN NI SE NECESITAN. Las cuotas son publicas. Entrar con la cuenta arriesga suspension con saldo dentro por acceso automatizado.",
+    "sondeos_fallidos_desde_esta_maquina": [
+      "eu-offering-api.kambicdn.com/offering/v2018/betplay/... -> 429 persistente (con y sin Origin/Referer)",
+      "settings-api.kambicdn.com/settings/betplay -> 403",
+      "El usuario, desde Colombia y en navegador, tambien ve \"no access\" en el endpoint eu-offering-api.",
+      "CONCLUSION: el host eu-offering-api no es el correcto para esta marca, o Kambi filtra todo lo que no sea el cliente real. NO volver a sondear a ciegas: hay que leer la URL real del feed en la pestana Network del navegador del usuario."
+    ],
+    "siguiente_accion": "El usuario debe abrir DevTools > Network > Fetch/XHR en la seccion de apuestas de Betplay y pasar la URL de las peticiones que devuelven las cuotas (filtrar por \"offering\" o \"kambi\").",
+    "feed_cuotas": {
+      "host": "https://us.offering-api.kambicdn.com (region US, NO eu-offering-api)",
+      "ejemplo": "https://us.offering-api.kambicdn.com/offering/v2018/betplay/betoffer/event/{event_id}.json?lang=es_CO&market=CO&client_id=200&channel_id=1&includeParticipants=true",
+      "cabeceras": "Referer y Origin https://betplay.com.co. Responde 200 desde fuera de Colombia.",
+      "contenido": "betOffers (60 en un partido de Liga BetPlay, 26 mercados distintos), events, prePacks",
+      "mercados_de_jugador_vistos": "Anotara (marcara), Anotador del primer gol, Marca al menos 2 goles. NO hay tiros a puerta de jugador en este partido.",
+      "prePacks": "Bet Builder: combinados del mismo partido YA COTIZADOS por la casa, con los ids de cada pata. Permite comparar cuota ofrecida contra producto de patas."
+    },
+    "margen_extra_del_bet_builder": "MEDIDO sobre el unico combinado mapeable exactamente al historico (btts + over 2.5): lift historico 1.489, cuota justa 2.88, Betplay ofrece 2.28 -> se queda un 20.8% ADEMAS del margen de cada pata. Es un solo caso, pero la magnitud no es marginal. Confirmarlo con mas muestras es el objetivo de la captura."
+  },
+  "diagnostico_de_rumbo": {
+    "pregunta": "El usuario pregunto si el modelo apunta bien para armar combinadas propias de cuota 25-100.",
+    "respuesta": "NO. Medido sobre la captura real de Betplay.",
+    "cobertura_actual": "El modelo (1X2 + over/under) valora 96 de 2.101 lineas = 4.6%. De las lineas con cuota 2.0-4.0 (las utiles para llegar a 25-100 con 4-5 patas) valora el 8.2%.",
+    "de_donde_saldria_el_resto": {
+      "DERIVABLE de la matriz de marcadores que Dixon-Coles YA calcula": "36.1% (resultado correcto, totales de cualquier linea, handicaps asiaticos, BTTS, totales por equipo)",
+      "+ Dixon-Coles de primera parte (mismo codigo, otra etiqueta)": "61.0% acumulado",
+      "+ modelo de corners (el dato ya esta en matchdata/warehouse)": "71.0% acumulado",
+      "gol de JUGADOR (Anotara, Anotador del primer gol, Marca al menos 2)": "27.3% — BLOQUEADO por falta de datos de jugador",
+      "tarjetas": "0.2%"
+    },
+    "clave_de_diseno": "Solo se estaban leyendo 3 numeros (P1/PX/P2) de una matriz de marcadores completa. El resto de mercados sale de la MISMA matriz sin modelar nada nuevo.",
+    "arquitectura_correcta": [
+      "1. Valorar CADA linea disponible con el modelo que corresponda (matriz de marcadores, 1a parte, corners).",
+      "2. EV por pata = p_modelo * cuota_betplay - 1, usando la cuota REAL capturada.",
+      "3. Construir el combinado con patas de PARTIDOS DISTINTOS: ahi Betplay multiplica limpio y no aplica ajuste por correlacion.",
+      "4. Anadir patas hasta alcanzar la cuota objetivo (25/50/100), maximizando EV.",
+      "5. Mostrar la probabilidad real del ticket sin adornos."
+    ],
+    "ADVERTENCIA_QUE_NO_HAY_QUE_OLVIDAR": "Los margenes de Betplay son del 9-13.6% frente al 2.67% de Pinnacle en 1X2. Que la linea sea menos afinada ayuda, pero hay que batir un margen 3-5 veces mayor. Cual de los dos efectos gana es una pregunta EMPIRICA que solo resuelve el historico que se esta acumulando. No dar por hecho que margen alto = oportunidad."
+  },
+  "datos_de_jugador": {
+    "estado": "DESBLOQUEADO en el 80.4% de las lineas de jugador, con token gratuito de football-data.org",
+    "fuentes_descartadas": {
+      "Understat": "ya no publica shotsData en el HTML (verificado 2026-09-11)",
+      "FBref": "403 Forbidden",
+      "StatsBomb open-data": "24 competiciones, ninguna de Colombia, casi todo historico"
+    },
+    "fuente_viable_parcial": "football-data.org — token GRATUITO con registro en football-data.org/client/register. Su plan libre cubre 12 competiciones (Premier, LaLiga, Serie A, Bundesliga, Ligue 1, Eredivisie, Primeira, Brasileirao, Championship, Champions). La Liga BetPlay (Primera A, id 2045) es TIER_FOUR = DE PAGO.",
+    "como_activarla": "exportar FOOTBALL_DATA_TOKEN. NO es una credencial de casa de apuestas: es una clave de API de estadisticas, no da acceso a dinero ni a ninguna cuenta personal.",
+    "limitacion_del_modelo": "aun con datos, el modelo no sabe si el jugador va a jugar. Sin alineaciones confirmadas (proveedor de pago) un suplente recibe la misma estimacion que un titular. El selector debe DESCARTAR estos mercados antes que publicar un numero inventado.",
+    "cobertura_real": "Medido sobre 20.901 lineas de jugador de 21 competiciones: 16.808 en ligas del plan gratuito (Premier, Championship, LaLiga, Serie A, Bundesliga, Ligue 1, Eredivisie, Primeira, Brasileirao). Las 4.093 restantes (Colombia, Argentina, Peru, Paraguay, Mexico, Suecia, Belgica, segundas divisiones) necesitarian proveedor de pago."
+  },
+  "CORRECCION_DE_ALCANCE": "El usuario corrigio (2026-09-11) que no hay que centrarse solo en el futbol colombiano. Tenia razon y el sesgo era mio: la primera captura fue solo Liga BetPlay y de ahi conclui que los datos de jugador estaban bloqueados. Betplay oferta 208 competiciones y 2.701 eventos de futbol; Liga BetPlay son 60, el 2.2%. Capturando 21 competiciones, el 80.4% de las lineas de jugador caen en ligas cubiertas por el plan GRATUITO de football-data.org. El bloqueo era un artefacto del muestreo, no un hecho.",
+  "despliegue": {
+    "donde": "GitHub Pages sirve el sitio; GitHub Actions ejecuta el ciclo diario. Pages NO ejecuta Python: solo publica ficheros.",
+    "ficheros": {
+      ".github/workflows/sondeo-feed.yml": "PRIMERO ESTO. Comprueba a mano si el feed de Kambi responde desde un runner de GitHub (IP de datacenter en EE.UU.). Decide todo lo demas.",
+      ".github/workflows/diario.yml": "cron 11:00 UTC (06:00 Colombia): almacen -> capturar -> emitir -> anotar -> liquidar -> imagenes -> sitio -> Pages",
+      "web/generar_sitio.py": "sitio estatico con los tickets del dia, el ROI acumulado y el historial",
+      "betplay/sondeo.py": "el sondeo en si; sale con codigo 1 si el feed no responde",
+      "requirements.txt": "dependencias de todo el proyecto para el workflow"
+    },
+    "secretos": "FOOTBALL_DATA_TOKEN va en Settings > Secrets and variables > Actions. NUNCA en el repo.",
+    "el_libro_se_cachea": "papel/libro se guarda con actions/cache y ademas como artefacto de 90 dias. Sin eso cada corrida empezaria con el libro vacio y el ROI real no se acumularia nunca, que es lo unico que puede validar el sistema.",
+    "riesgo_principal": "SIN VERIFICAR: si Kambi bloquea las IPs de datacenter, capturar.py falla en Actions. Entonces la captura debe correr en el PC del usuario (Programador de tareas) o en un VPS en Colombia, y Actions limitarse a publicar.",
+    "medido": "El repo son 615 KB en 69 ficheros. Los 198 MB de crawler/, los 25 MB de datos generados y el .env quedan excluidos por .gitignore (verificado con git check-ignore)."
+  }
+}

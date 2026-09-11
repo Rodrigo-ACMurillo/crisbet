@@ -1,0 +1,35 @@
+# Sondeo: ¿responde el feed de Betplay desde un runner de GitHub?
+#
+# Esta es la pregunta que decide si el resto del despliegue tiene sentido. La
+# captura funciona desde una máquina en Colombia; los runners de Actions son IPs
+# de datacenter en EE. UU. y Kambi filtra por origen (durante la investigación
+# devolvió 429 en eu-offering-api y 403 en settings-api).
+#
+# Se lanza a mano desde la pestaña Actions. Si falla, la captura tiene que correr
+# en otra parte —tu PC o un VPS en Colombia— y Actions limitarse a publicar.
+name: Sondeo del feed
+
+on:
+  workflow_dispatch:
+
+jobs:
+  sondear:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Probar el feed de Kambi
+        working-directory: betplay
+        run: python sondeo.py
+
+      - name: Guardar el informe
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sondeo
+          path: betplay/reports/sondeo.json
