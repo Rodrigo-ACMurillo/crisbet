@@ -182,6 +182,30 @@ el job `publicar` del workflow y quédate con los artefactos:
           path: _sitio
 ```
 
+### Trampa: el entorno `github-pages` recuerda la rama con la que se creó
+
+Al activar Pages, GitHub crea un entorno llamado `github-pages` y le fija como
+rama permitida **la que fuera la rama por defecto en ese momento**. Si después
+cambias la rama por defecto, el entorno **no se actualiza solo** y el despliegue
+falla con:
+
+```
+Branch "main" is not allowed to deploy to github-pages due to
+environment protection rules.
+```
+
+El mensaje suena a permisos del repo o del token, y no es ninguna de las dos
+cosas. Se arregla en:
+
+*Settings → Environments → github-pages → Deployment branches and tags*
+
+Ahí verás la regla con la rama vieja. O la editas y pones la nueva, o cambias el
+desplegable a *No restriction*.
+
+Le pasa a cualquiera que active Pages antes de pasar de `master` a `main`.
+Después basta con *Re-run failed jobs*: solo se repite `publicar`, porque el
+artefacto que generó el otro job sigue disponible.
+
 La URL, cuando funciona, es
 `https://rodrigo-acmurillo.github.io/crisbet/` y tarda 1-2 minutos en aparecer
 tras el primer despliegue.
