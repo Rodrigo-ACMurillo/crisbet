@@ -1,6 +1,6 @@
 # Ciclo diario: capturar cuotas, emitir tickets, liquidar lo vencido y publicar.
 #
-# Dos detalles que no son cosméticos:
+# Tres detalles que no son cosméticos:
 #
 # 1. El LIBRO de tickets se guarda en caché y se restaura en cada ejecución. Sin
 #    eso, cada corrida empezaría con el libro vacío y el ROI real nunca se
@@ -10,6 +10,11 @@
 #
 # 2. La liquidación va DESPUÉS de emitir, porque resuelve tickets de días
 #    anteriores: los partidos de hoy todavía no han terminado.
+#
+# 3. `--hasta` NO se fija: build.py deduce la temporada en curso de la fecha. Si
+#    se dejara escrito un año, en agosto el modelo dejaría de ver los partidos
+#    más recientes y los equipos recién ascendidos no existirían para él, sin
+#    ningún síntoma visible.
 name: Tickets diarios
 
 on:
@@ -78,7 +83,17 @@ jobs:
         working-directory: papel
         run: python registro.py anotar
 
+      # `continue-on-error` porque liquidar depende de un servicio externo y de
+      # un secreto: si falla, los tickets de HOY siguen siendo validos y deben
+      # publicarse igual. Sin esto, un token caducado tumbaba el workflow entero
+      # y no salia nada, ni siquiera lo que no dependia de el.
+      #
+      # El fallo no se esconde: el paso queda en amarillo en la pestana Actions,
+      # y en la web el contador de "pendientes de resolver" crece mientras
+      # "liquidados" no se mueve. Si ves eso, mira aqui.
       - name: Liquidar los tickets vencidos
+        id: liquidar
+        continue-on-error: true
         working-directory: papel
         env:
           FOOTBALL_DATA_TOKEN: ${{ secrets.FOOTBALL_DATA_TOKEN }}
@@ -104,6 +119,11 @@ jobs:
           name: libro-tickets
           path: papel/libro
           retention-days: 90
+
+      - name: Avisar si la liquidación falló
+        if: steps.liquidar.outcome == 'failure'
+        run: |
+          echo "::warning title=Liquidación fallida::Los tickets nuevos se publican, pero el historial NO se actualiza. Revisa el secreto FOOTBALL_DATA_TOKEN en Settings > Secrets and variables > Actions."
 
       - uses: actions/upload-pages-artifact@v3
         with:

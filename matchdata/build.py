@@ -15,9 +15,10 @@ cada fila ya calculada.
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
 import os
-from typing import Any, Dict, List, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 from canonical import LIGAS, Match, OddsCierre
 from features import columnas_entrada, construir, ordenar_cronologico
@@ -27,6 +28,24 @@ try:
     import pandas as pd
 except ImportError:
     pd = None
+
+
+def temporada_actual(hoy: Optional[dt.date] = None) -> str:
+    """La temporada en curso, deducida de la fecha.
+
+    Dejar el ultimo ano fijo en la configuracion tiene un coste silencioso: en
+    cuanto empieza una temporada nueva, el modelo deja de ver los partidos mas
+    recientes —justo los que mas pesan por el decaimiento temporal— y los
+    equipos recien ascendidos no existen para el, asi que sus partidos no se
+    pueden valorar. Y nadie se entera hasta que alguien revisa por que faltan
+    equipos.
+
+    Las ligas europeas arrancan en agosto: a partir de julio ya cuenta como
+    temporada nueva.
+    """
+    hoy = hoy or dt.date.today()
+    inicio = hoy.year if hoy.month >= 7 else hoy.year - 1
+    return f"{inicio}-{str(inicio + 1)[2:]}"
 
 
 def temporadas_entre(desde: str, hasta: str) -> List[str]:
@@ -149,7 +168,9 @@ def cobertura_features(filas: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
 
 def run(args: argparse.Namespace) -> Dict[str, Any]:
     proveedor = obtener_proveedor(args.proveedor, cache_dir=args.cache)
-    temporadas = temporadas_entre(args.desde, args.hasta)
+    hasta = args.hasta or temporada_actual()
+    temporadas = temporadas_entre(args.desde, hasta)
+    print(f"temporadas {args.desde} a {hasta} ({len(temporadas)})")
 
     partidos: List[Match] = []
     cuotas: List[OddsCierre] = []
@@ -192,6 +213,7 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
         "proveedor": proveedor.nombre,
         "ligas": args.ligas,
         "temporadas": temporadas,
+        "temporada_en_curso": hasta,
         "descargas_fallidas": fallos,
         "partidos": len(partidos),
         "partidos_duplicados_descartados": duplicados,
@@ -218,7 +240,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--ligas", nargs="+", default=["E0", "SP1", "I1", "D1", "F1"],
                    choices=list(LIGAS.keys()))
     p.add_argument("--desde", default="2019-20")
-    p.add_argument("--hasta", default="2024-25")
+    p.add_argument("--hasta", default=None,
+                   help="por defecto, la temporada en curso segun la fecha")
     p.add_argument("--proveedor", default="football-data")
     p.add_argument("--warehouse", default="warehouse")
     p.add_argument("--cache", default="cache_csv")

@@ -23,6 +23,13 @@ from canonical import LIGAS, Match, OddsCierre, match_id, slug_equipo
 USER_AGENT = "CrisbetBot/0.3 (+https://crisbet.example/bot)"
 
 
+def _temporada_actual() -> str:
+    """Duplicado a proposito de build.py: providers no debe depender de el."""
+    hoy = dt.date.today()
+    inicio = hoy.year if hoy.month >= 7 else hoy.year - 1
+    return f"{inicio}-{str(inicio + 1)[2:]}"
+
+
 class MatchProvider(ABC):
     """Toda fuente de verdad numerica cumple esto."""
 
@@ -37,16 +44,30 @@ class MatchProvider(ABC):
         ...
 
 
-def _descargar(url: str, reintentos: int = 3, cache_dir: Optional[str] = None) -> Optional[str]:
-    """GET con reintentos y cache en disco. Los CSV historicos no cambian, asi
-    que volver a pedirlos en cada ejecucion es puro desperdicio."""
+def _descargar(url: str, reintentos: int = 3, cache_dir: Optional[str] = None,
+               max_edad_horas: Optional[float] = None) -> Optional[str]:
+    """GET con reintentos y cache en disco.
+
+    Los CSV de temporadas cerradas no cambian nunca, asi que cachearlos para
+    siempre es correcto. El de la temporada EN CURSO es otra cosa: crece cada
+    jornada. Cachearlo sin caducidad congela el modelo en la jornada del dia en
+    que se descargo por primera vez, y no hay ningun sintoma: el pipeline corre
+    entero, sin errores, con datos viejos.
+
+    Por eso `max_edad_horas` invalida la copia local pasado ese tiempo.
+    """
     ruta_cache = None
     if cache_dir:
         os.makedirs(cache_dir, exist_ok=True)
         ruta_cache = os.path.join(cache_dir, url.replace("://", "_").replace("/", "_"))
         if os.path.exists(ruta_cache) and os.path.getsize(ruta_cache) > 0:
-            with open(ruta_cache, "r", encoding="utf-8") as fh:
-                return fh.read()
+            fresca = True
+            if max_edad_horas is not None:
+                edad = (time.time() - os.path.getmtime(ruta_cache)) / 3600.0
+                fresca = edad < max_edad_horas
+            if fresca:
+                with open(ruta_cache, "r", encoding="utf-8") as fh:
+                    return fh.read()
 
     for intento in range(reintentos):
         try:
@@ -95,8 +116,10 @@ class FootballDataUK(MatchProvider):
     CASAS_1X2 = [("PSC", "pinnacle"), ("B365C", "bet365"), ("AvgC", "media_mercado"),
                  ("MaxC", "mejor_disponible")]
 
-    def __init__(self, cache_dir: str = "cache_csv"):
+    def __init__(self, cache_dir: str = "cache_csv",
+                 temporada_en_curso: Optional[str] = None):
         self.cache_dir = cache_dir
+        self.temporada_en_curso = temporada_en_curso or _temporada_actual()
 
     def ligas_disponibles(self) -> List[str]:
         return list(LIGAS.keys())
@@ -138,7 +161,10 @@ class FootballDataUK(MatchProvider):
         return dia.strftime("%Y-%m-%dT%H:%M:%SZ")
 
     def partidos(self, liga: str, temporada: str) -> Tuple[List[Match], List[OddsCierre]]:
-        texto = _descargar(self._url(liga, temporada), cache_dir=self.cache_dir)
+        # La temporada en curso se refresca cada 6 horas; las cerradas, nunca.
+        en_curso = temporada == self.temporada_en_curso
+        texto = _descargar(self._url(liga, temporada), cache_dir=self.cache_dir,
+                           max_edad_horas=6.0 if en_curso else None)
         if not texto:
             return [], []
 
