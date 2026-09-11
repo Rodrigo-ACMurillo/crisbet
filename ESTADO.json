@@ -347,6 +347,15 @@
     "secretos": "FOOTBALL_DATA_TOKEN va en Settings > Secrets and variables > Actions. NUNCA en el repo.",
     "el_libro_se_cachea": "papel/libro se guarda con actions/cache y ademas como artefacto de 90 dias. Sin eso cada corrida empezaria con el libro vacio y el ROI real no se acumularia nunca, que es lo unico que puede validar el sistema.",
     "riesgo_principal": "SIN VERIFICAR: si Kambi bloquea las IPs de datacenter, capturar.py falla en Actions. Entonces la captura debe correr en el PC del usuario (Programador de tareas) o en un VPS en Colombia, y Actions limitarse a publicar.",
-    "medido": "El repo son 615 KB en 69 ficheros. Los 198 MB de crawler/, los 25 MB de datos generados y el .env quedan excluidos por .gitignore (verificado con git check-ignore)."
+    "medido": "El repo son 615 KB en 69 ficheros. Los 198 MB de crawler/, los 25 MB de datos generados y el .env quedan excluidos por .gitignore (verificado con git check-ignore).",
+    "guia": "docs/DESPLIEGUE.md — procedimiento paso a paso con las trampas de cada uno",
+    "bloqueo_actual": "El push falla: \"Permission to Rodrigo-ACMurillo/crisbet.git denied to Sr-Claude\". C:/Users/LENOVO/.git-credentials guarda un token del usuario Sr-Claude y el repo es de Rodrigo-ACMurillo. Ademas hay TRES helpers configurados (manager + store + store), asi que borrar la credencial en un solo sitio no basta. Sin resolver: el usuario debe decidir si usa la cuenta Rodrigo-ACMurillo (nuevo token con scope repo) o da acceso a Sr-Claude como colaborador. NO tocar sus credenciales sin que lo decida.",
+    "trampas_documentadas": [
+      "Pages NO existe para repos privados en plan Free: o el repo es publico, o el sitio se queda como artefacto descargable.",
+      "Los workflows solo corren desde la rama POR DEFECTO. El repo local esta en master y GitHub crea los repos nuevos en main: si no coinciden, ni el cron ni el boton \"Run workflow\" aparecen, y no avisa de nada.",
+      "Si el nombre del secreto no coincide con FOOTBALL_DATA_TOKEN, no hay error: la liquidacion falla pero el resto del workflow publica igual, con tickets nuevos y el historial congelado.",
+      "La cache de Actions caduca a los 7 dias sin uso: si el workflow se para dos semanas, el libro se pierde. Por eso tambien se sube como artefacto de 90 dias. Lo correcto a futuro es sacar el libro a una base de datos real.",
+      "El cron de GitHub se desactiva solo tras 60 dias sin actividad en repos publicos."
+    ]
   }
 }
