@@ -2,11 +2,11 @@
 #
 # Tres detalles que no son cosméticos:
 #
-# 1. El LIBRO de tickets se guarda en caché y se restaura en cada ejecución. Sin
-#    eso, cada corrida empezaría con el libro vacío y el ROI real nunca se
-#    acumularía: el historial es justo lo único que puede validar el sistema.
-#    La caché de Actions caduca a los 7 días sin uso, así que además se sube como
-#    artefacto con retención larga.
+# 1. El LIBRO de tickets vive EN EL REPOSITORIO (papel/libro/tickets.jsonl) y el
+#    workflow hace commit de vuelta. Antes vivía en una caché de Actions, que
+#    caduca a los 7 días sin uso: dos semanas de parada y se perdía el historial
+#    entero, que es lo único capaz de validar el sistema. En el repo es duradero,
+#    versionado y auditable — cada emisión queda fechada en un commit.
 #
 # 2. La liquidación va DESPUÉS de emitir, porque resuelve tickets de días
 #    anteriores: los partidos de hoy todavía no han terminado.
@@ -31,7 +31,7 @@ on:
         default: "5"
 
 permissions:
-  contents: read
+  contents: write      # para hacer commit del libro de tickets
   pages: write
   id-token: write
 
@@ -53,14 +53,6 @@ jobs:
 
       - name: Instalar dependencias
         run: pip install --quiet -r requirements.txt
-
-      - name: Restaurar el libro de tickets
-        uses: actions/cache/restore@v4
-        with:
-          path: papel/libro
-          key: libro-${{ github.run_id }}
-          restore-keys: |
-            libro-
 
       - name: Reconstruir el almacén de partidos
         run: |
@@ -105,19 +97,29 @@ jobs:
           cd web && python generar_sitio.py --salida ../_sitio
           cp -r ../papel/tickets_png ../_sitio/ 2>/dev/null || true
 
-      - name: Guardar el libro (caché)
-        uses: actions/cache/save@v4
+      # El commit del libro es lo que hace que el historial sobreviva a la
+      # ejecución. `[skip ci]` evita que este commit dispare otro workflow.
+      - name: Guardar el libro en el repositorio
         if: always()
-        with:
-          path: papel/libro
-          key: libro-${{ github.run_id }}
+        run: |
+          git config user.name "crisbet-bot"
+          git config user.email "actions@github.com"
+          git add papel/libro/tickets.jsonl
+          if git diff --cached --quiet; then
+            echo "El libro no cambió: nada que commitear."
+          else
+            git commit -m "Libro de tickets: $(date -u +%Y-%m-%d) [skip ci]"
+            # Otra corrida pudo empujar entretanto: se rebasa antes de empujar.
+            git pull --rebase --autostash origin ${{ github.ref_name }}
+            git push
+          fi
 
-      - name: Guardar el libro (artefacto duradero)
+      - name: Copia de seguridad del libro
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: libro-tickets
-          path: papel/libro
+          path: papel/libro/tickets.jsonl
           retention-days: 90
 
       - name: Avisar si la liquidación falló

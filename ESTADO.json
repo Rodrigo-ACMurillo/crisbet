@@ -4,14 +4,15 @@
   "raiz": "L:/crisbet",
   "actualizado": "2026-09-12",
   "plan": "docs/PLAN_SPRINTS.md",
-  "sprint_actual": "despliegue-web",
-  "sprint_actual_estado": "montado y validado en local; falta el sondeo desde GitHub Actions",
-  "siguiente_paso": "ORDEN CONCRETO PARA PUBLICAR: (1) crear el repo en GitHub y hacer el primer push (el indice ya esta preparado, 69 ficheros y 615 KB, sin .env); (2) anadir FOOTBALL_DATA_TOKEN en Settings > Secrets and variables > Actions; (3) Settings > Pages > Source: GitHub Actions; (4) lanzar A MANO el workflow \"Sondeo del feed\" desde la pestana Actions — si falla, la captura no puede correr en GitHub y hay que moverla al PC o a un VPS en Colombia; (5) solo si el sondeo pasa, dejar que el cron diario haga el resto. PENDIENTE APARTE: el usuario debe cambiar la contrasena de Betplay (estuvo en texto plano) y rotar el token de football-data.org (se pego en el chat).",
+  "sprint_actual": "0 + cobertura",
+  "sprint_actual_estado": "Sprint 0 entregado; libro migrado al repositorio; corners y 2a parte conectados",
+  "siguiente_paso": "Sprint 0 cerrado (viable legalmente, no demostrado tecnicamente, coste cero). Corners y segunda parte conectados. Libro ya duradero en el repo. AHORA: (1) el usuario debe hacer push de todo esto y arreglar el secreto y la regla de ramas del entorno github-pages; (2) esperar al paper trading — con menos de 100 tickets liquidados el ROI no dice nada; (3) cuando el paper trading hable, decidir si se pagan los 19 EUR/mes de API-Football, que es lo unico que desbloquea el 72% de lineas restantes (todas de jugador) y ademas trae alineaciones confirmadas.",
   "sprints": {
     "0": {
-      "estado": "pendiente",
-      "titulo": "Validacion legal y baseline",
-      "nota": "No ejecutado. Bloquea la decision de negocio, no el codigo."
+      "estado": "completado",
+      "titulo": "Validacion y fundamentos",
+      "ruta": "docs/SPRINT0_VIABILIDAD.md",
+      "dictamen": "LEGAL: viable sin licencia de Coljuegos mientras NUNCA se custodie dinero de terceros. La Ley 643/2001 art.5 define juego de suerte y azar por tres elementos simultaneos (el usuario apuesta o paga por participar, el servicio ofrece premio, el resultado es azaroso) y un servicio de pronosticos no cumple ninguno: el suscriptor paga por informacion, no por participar, y no se le paga premio. El monopolio del art.2 recae sobre OPERAR el juego. RIESGO REAL no es Coljuegos sino la SIC por publicidad enganosa, y afiliarse a la casa (cobrar por referidos) cambiaria el analisis entero. Pendiente de confirmacion por abogado antes de cobrar. TECNICO: no demostrado, el modelo no bate al mercado. ECONOMICO: coste 0 EUR/mes, sin dinero expuesto."
     },
     "1": {
       "estado": "completado",
@@ -112,7 +113,7 @@
     "model/": {
       "proposito": "Probabilidades calibradas 1X2 y comparacion honesta contra la cuota de cierre",
       "modulos": {
-        "dixon_coles.py": "Poisson bivariante + correccion de marcadores bajos + decaimiento temporal. partidos_de_primera_parte() reetiqueta con goles al descanso: mismo modelo, mercados de 1a parte",
+        "dixon_coles.py": "Poisson bivariante + correccion de marcadores bajos + decaimiento temporal. partidos_de_primera_parte() reetiqueta con goles al descanso: mismo modelo, mercados de 1a parte. partidos_de_segunda_parte() (total menos descanso) y media_de_corners() para el modelo de conteo",
         "gbm.py": "LightGBM multiclase sobre las features del Sprint 3",
         "calibration.py": "isotonica por clase CON control (solo se aplica si mejora) + ensamblado ponderado",
         "walkforward.py": "folds por temporada, corte por kickoff, verificacion de integridad temporal",
@@ -149,7 +150,7 @@
       "modulos": {
         "liquidacion.py": "logica pura: (ganado, devuelto) de cada pata. Cinco desenlaces, no dos. Sin red",
         "resultados.py": "marcadores desde football-data.org, con el descanso (necesario para los mercados de 1a parte)",
-        "registro.py": "anotar / liquidar / resumen. Idempotente: el id del ticket sale de su contenido",
+        "registro.py": "anotar / liquidar / resumen sobre libro/tickets.jsonl EN EL REPOSITORIO (antes parquet en cache de CI). Escritura atomica via fichero temporal; una linea ilegible no tumba el historial",
         "test_liquidacion.py": "48 comprobaciones exhaustivas",
         "imagen.py": "genera un PNG por ticket con formato de boleto. El alto se DERIVA del contenido en las mismas unidades en que se dibuja: calcularlo a ojo dejaba fuera del lienzo el aviso de riesgo, que no es opcional. La probabilidad real va en el encabezado al lado de la cuota, no en letra pequena."
       },
@@ -193,7 +194,8 @@
     "selector": "Sobre 140 partidos capturados: 41 valorados (48 en ligas conocidas, 91.7% de equipos emparejados). 4.927 lineas de partido completo valoradas: EV medio -19.6%, mediano -14.1%, solo 24.1% con EV positivo, modelo por debajo de la casa en los 5 tramos de probabilidad (coherente: las cuotas de la casa llevan margen). Con el guardarrail de desvio maximo del 6%: 291 patas candidatas y tickets de cuota ~50 con probabilidad real del 2.5-4.4% y patas de EV 10-21%. Pruebas: test_selector 29, test_mercados 82, test_model 53.",
     "paper_trading": "Liquidacion verificada contra un partido real (Liverpool 2-2 Nottingham Forest, descanso 0-1): 1X2 \"1\" PIERDE, over 2.5 GANA, menos de 1.5 en 1a parte GANA, asiatico -0.5 PIERDE, BTTS si GANA. Todo correcto. Libro idempotente: re-anotar los mismos 5 tickets registra 0. test_liquidacion.py 48/48. diario.py ejecuta las 4 etapas y deja informe en reports/diario.json.",
     "temporada_en_curso": "build.py --desde 2024-25 (sin --hasta) detecta 2026-27 y descarga: E0 2026-27 con 30 partidos y SP1 2026-27 con 41. Antes esas dos temporadas quedaban fuera.",
-    "ci_primera_corrida": "GitHub Actions 2026-09-11: build 20.533 partidos en 68s; captura 140 partidos, 164 peticiones, 0 errores, 33.7 MB; selector 35 partidos valorados, 385 patas con EV positivo, 5 tickets; anotados 5 en el libro. Fallo solo en liquidar (secreto vacio) y en publicar (regla de ramas del entorno github-pages). CONFIRMADO: Kambi responde sin problema desde los runners de GitHub."
+    "ci_primera_corrida": "GitHub Actions 2026-09-11: build 20.533 partidos en 68s; captura 140 partidos, 164 peticiones, 0 errores, 33.7 MB; selector 35 partidos valorados, 385 patas con EV positivo, 5 tickets; anotados 5 en el libro. Fallo solo en liquidar (secreto vacio) y en publicar (regla de ramas del entorno github-pages). CONFIRMADO: Kambi responde sin problema desde los runners de GitHub.",
+    "cobertura_real_del_selector": "MEDIDO llamando a valorar_linea sobre 31.208 lineas: 35.9% se resuelven (4.962 partido completo, 2.896 corners, 2.443 primera parte, 892 segunda parte). OJO: la cifra del 72% que reporte antes contaba que mercados el catalogo PODRIA valorar por su etiqueta, no los que el traductor RESUELVE. De las 4.757 lineas sin valorar en Premier, el 72% son de JUGADOR (faltas, disparos, anotador, tarjetas, asistencias). CONCLUSION: la traduccion y el modelo ya no son el cuello de botella; lo es el dato de jugador."
   },
   "problemas_corregidos": [
     "crawler/main.py: al alcanzar el objetivo no cancelaba las tareas pendientes; el proceso quedaba colgado y moria antes de vaciar el buffer (fichero de salida vacio). Corregido con un vigilante que cancela.",
@@ -220,7 +222,8 @@
     "papel/imagen.py: las patas mostraban \"Handicap: 1 -1.5\" en vez del nombre del equipo, obligando a recordar quien era el local. Y el signo se anadia tambien a los totales (\"Menos de +1.5\"), donde no significa nada.",
     "El proyecto no era un repositorio git y el .env con la contrasena de Betplay estaba en texto plano sin .gitignore. Ahora .gitignore excluye .env, los datos generados y los 198 MB del crawler; verificado que .env NO entra en el indice.",
     "matchdata/build.py: --hasta estaba fijo en el workflow (2025-26) y la temporada en curso ya era 2026-27. El modelo no habria visto los partidos mas recientes —los que mas pesan por el decaimiento temporal— ni a los equipos recien ascendidos, sin ningun sintoma. Ahora temporada_actual() la deduce de la fecha (julio marca el cambio de temporada).",
-    "matchdata/providers.py: la cache de CSV no caducaba nunca. El fichero de la temporada EN CURSO crece cada jornada, asi que el modelo se habria congelado en la jornada del dia en que se cacheo por primera vez, sin error alguno. Ahora la temporada en curso caduca a las 6 horas y las cerradas se cachean para siempre."
+    "matchdata/providers.py: la cache de CSV no caducaba nunca. El fichero de la temporada EN CURSO crece cada jornada, asi que el modelo se habria congelado en la jornada del dia en que se cacheo por primera vez, sin error alguno. Ahora la temporada en curso caduca a las 6 horas y las cerradas se cachean para siempre.",
+    "Reporte una cobertura del 72% clasificando etiquetas de mercado, no midiendo lo que el selector resuelve de verdad. La cifra real es 35.9%. Medir la capacidad teorica en vez del comportamiento real es la clase de error que hace creer que un problema esta resuelto."
   ],
   "limitaciones_conocidas": [
     "js_rendered: sitios SPA (flashscore.com, abola.pt) no entregan texto sin navegador headless. Anotado, no resuelto: en el Sprint 3 dejan de ser fuente de verdad.",
@@ -365,5 +368,12 @@
     ],
     "sondeo_resultado": "PASADO (2026-09-12): el usuario ejecuto \"Sondeo del feed\" en GitHub Actions y salio en verde. Kambi ACEPTA las IPs de los runners de GitHub: la captura puede correr en Actions, no hace falta VPS ni el PC del usuario."
   },
-  "MERCADOS_DE_DISPARO_DE_JUGADOR": "CORRECCION IMPORTANTE (2026-09-12): antes dije que no existia mercado de tiros a puerta de jugador. Era falso: lo mire en un solo partido de Liga BetPlay. En la captura amplia hay 4.724 lineas de disparos sobre 1.928 jugadores, resueltas con datos Opta: \"Disparos a puerta del jugador\" (2.552 lineas, cuota media 3.65), \"Disparos del jugador\" (2.162, cuota 2.20), cabezazos a puerta, asistencias, faltas y tarjetas por jugador. ES EXACTAMENTE EL PRODUCTO QUE EL USUARIO PIDIO AL PRINCIPIO. Lo que falta NO es el mercado sino el MODELO: football-data.org da goles por jugador, no disparos. Para valorar \"X 2+ tiros a puerta\" hace falta la tasa de disparos del jugador, y ahi sigue el hueco (Understat cerrado, FBref 403, StatsBomb sin cobertura). Es un hueco mucho mas concreto que antes y es la via mas directa al producto que el usuario queria."
+  "MERCADOS_DE_DISPARO_DE_JUGADOR": "CORRECCION IMPORTANTE (2026-09-12): antes dije que no existia mercado de tiros a puerta de jugador. Era falso: lo mire en un solo partido de Liga BetPlay. En la captura amplia hay 4.724 lineas de disparos sobre 1.928 jugadores, resueltas con datos Opta: \"Disparos a puerta del jugador\" (2.552 lineas, cuota media 3.65), \"Disparos del jugador\" (2.162, cuota 2.20), cabezazos a puerta, asistencias, faltas y tarjetas por jugador. ES EXACTAMENTE EL PRODUCTO QUE EL USUARIO PIDIO AL PRINCIPIO. Lo que falta NO es el mercado sino el MODELO: football-data.org da goles por jugador, no disparos. Para valorar \"X 2+ tiros a puerta\" hace falta la tasa de disparos del jugador, y ahi sigue el hueco (Understat cerrado, FBref 403, StatsBomb sin cobertura). Es un hueco mucho mas concreto que antes y es la via mas directa al producto que el usuario queria.",
+  "libro_de_tickets": {
+    "donde": "papel/libro/tickets.jsonl, DENTRO del repositorio git",
+    "por_que": "La cache de GitHub Actions caduca a los 7 dias sin uso: dos semanas de parada y se perdia el historial entero, que es lo unico capaz de validar el sistema. En el repo es duradero, versionado y auditable.",
+    "por_que_jsonl": "git versiona texto: un ticket nuevo es una linea nueva en el diff, no un binario entero. A 5 tickets diarios son ~1.800 lineas al ano, menos de 1 MB.",
+    "el_workflow_hace_commit": "permissions: contents: write, y un paso que commitea con [skip ci] y hace pull --rebase antes de empujar por si otra corrida se adelanto.",
+    "idea_del_usuario": "La propuso el usuario y es mejor que la cache que yo habia montado."
+  }
 }

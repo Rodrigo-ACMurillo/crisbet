@@ -4,16 +4,26 @@ Esto es lo que convierte el proyecto de "el modelo promete un EV" a "el modelo
 devolvio esto". Sin este registro, cada ejecucion del selector produce un numero
 optimista que nadie comprueba nunca.
 
+**El libro vive en el repositorio, en JSONL.** Antes vivia en una cache de
+GitHub Actions, que caduca a los 7 dias sin uso: dos semanas de parada y se
+perdia el historial entero — justo lo unico capaz de validar el sistema.
+Guardarlo en el repo lo hace duradero, versionado y auditable: cada commit deja
+constancia de que se emitio y cuando, y reescribir el pasado exige un commit que
+queda a la vista.
+
+JSON por lineas y no parquet porque git versiona texto: un ticket nuevo es una
+linea nueva en el diff, no un binario entero que cambia. A 5 tickets diarios son
+~1.800 lineas al ano, menos de 1 MB.
+
 Dos reglas que hacen honesto el ejercicio:
 
-**Se registra ANTES de conocer el resultado.** El fichero guarda la cuota y la
+**Se registra ANTES de conocer el resultado.** El libro guarda la cuota y la
 probabilidad del modelo en el instante de emitir. Reconstruirlo despues, con los
-resultados a la vista, permitiria elegir sin querer los tickets que salieron
-bien.
+resultados a la vista, permitiria elegir sin querer los tickets que salieron bien.
 
-**Un ticket no se re-registra.** Su identificador sale del contenido (partidos,
-mercados, selecciones, cuotas), asi que volver a ejecutar el selector no duplica
-apuestas ni permite "mejorar" una emision anterior.
+**Un ticket no se re-registra.** Su identificador sale del contenido, asi que
+volver a ejecutar el selector no duplica apuestas ni permite "mejorar" una
+emision anterior.
 
     python registro.py anotar --tickets ../model/reports/tickets.json
     python registro.py liquidar
@@ -23,24 +33,19 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
-import glob
 import hashlib
 import json
+import math
 import os
 import sys
 from typing import Any, Dict, List, Optional
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from liquidacion import Marcador, liquidar_ticket
+from liquidacion import liquidar_ticket
 from resultados import ResultadosFootballData
 
-try:
-    import pandas as pd
-except ImportError:
-    pd = None
-
-LIBRO = "libro/tickets.parquet"
+LIBRO = "libro/tickets.jsonl"
 
 
 def ahora() -> str:
@@ -55,25 +60,50 @@ def id_de_ticket(patas: List[Dict[str, Any]]) -> str:
     return hashlib.sha256(clave.encode("utf-8")).hexdigest()[:20]
 
 
+def leer_libro(libro: str) -> List[Dict[str, Any]]:
+    """Lee el libro. Una linea ilegible no puede tumbar el historial entero."""
+    if not os.path.exists(libro):
+        return []
+    filas: List[Dict[str, Any]] = []
+    with open(libro, encoding="utf-8") as fh:
+        for n, linea in enumerate(fh, 1):
+            linea = linea.strip()
+            if not linea:
+                continue
+            try:
+                filas.append(json.loads(linea))
+            except ValueError:
+                print(f"  aviso: linea {n} ilegible, se omite del calculo")
+    return filas
+
+
+def escribir_libro(libro: str, filas: List[Dict[str, Any]]) -> None:
+    """Escritura atomica: si el proceso muere a mitad, el libro viejo sobrevive."""
+    os.makedirs(os.path.dirname(os.path.abspath(libro)) or ".", exist_ok=True)
+    tmp = libro + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        for fila in filas:
+            fh.write(json.dumps(fila, ensure_ascii=False))
+            fh.write("\n")
+    os.replace(tmp, libro)
+
+
 def anotar(ruta_tickets: str, libro: str, importe: float = 1.0) -> Dict[str, Any]:
-    if pd is None:
-        raise SystemExit("pandas/pyarrow necesarios")
-    with open(ruta_tickets, "r", encoding="utf-8") as fh:
+    with open(ruta_tickets, encoding="utf-8") as fh:
         informe = json.load(fh)
     tickets = informe.get("tickets", [])
     if not tickets:
         raise SystemExit("El informe no trae tickets")
 
-    existentes = set()
-    if os.path.exists(libro):
-        existentes = set(pd.read_parquet(libro)["ticket_id"])
+    libro_actual = leer_libro(libro)
+    existentes = {f["ticket_id"] for f in libro_actual}
 
-    filas = []
+    nuevos = []
     for t in tickets:
         tid = id_de_ticket(t["patas"])
         if tid in existentes:
             continue
-        filas.append({
+        nuevos.append({
             "ticket_id": tid,
             "emitido_en": ahora(),
             "cuota": t["cuota_combinada"],
@@ -84,29 +114,25 @@ def anotar(ruta_tickets: str, libro: str, importe: float = 1.0) -> Dict[str, Any
             "estado": "pendiente",
             "pago": None,
             "retorno": None,
-            "patas_json": json.dumps(t["patas"], ensure_ascii=False),
+            "patas": t["patas"],
             "primer_inicio": min(p["inicio"] for p in t["patas"]),
             "ultimo_inicio": max(p["inicio"] for p in t["patas"]),
         })
 
-    if filas:
-        os.makedirs(os.path.dirname(os.path.abspath(libro)) or ".", exist_ok=True)
-        nuevo = pd.DataFrame(filas)
-        if os.path.exists(libro):
-            nuevo = pd.concat([pd.read_parquet(libro), nuevo], ignore_index=True)
-        nuevo.to_parquet(libro, index=False, compression="zstd")
+    if nuevos:
+        escribir_libro(libro, libro_actual + nuevos)
 
-    return {"tickets_en_el_informe": len(tickets), "anotados": len(filas),
-            "ya_registrados": len(tickets) - len(filas), "libro": libro}
+    return {"tickets_en_el_informe": len(tickets), "anotados": len(nuevos),
+            "ya_registrados": len(tickets) - len(nuevos), "libro": libro}
 
 
 def liquidar(libro: str, token: Optional[str] = None) -> Dict[str, Any]:
     """Busca resultados de los tickets pendientes y los liquida."""
-    if pd is None or not os.path.exists(libro):
+    filas = leer_libro(libro)
+    if not filas:
         raise SystemExit(f"No hay libro en {libro}. Anota tickets primero.")
-    df = pd.read_parquet(libro)
-    pendientes = df[df["estado"] == "pendiente"]
-    if pendientes.empty:
+    pendientes = [f for f in filas if f["estado"] == "pendiente"]
+    if not pendientes:
         return {"pendientes": 0, "liquidados": 0}
 
     fuente = ResultadosFootballData(token)
@@ -116,52 +142,58 @@ def liquidar(libro: str, token: Optional[str] = None) -> Dict[str, Any]:
     # Se piden los resultados por partido, no por ticket: varios tickets
     # comparten partidos y no tiene sentido consultar dos veces.
     necesarios: Dict[int, Dict[str, Any]] = {}
-    for _, fila in pendientes.iterrows():
-        for p in json.loads(fila["patas_json"]):
+    for fila in pendientes:
+        for p in fila["patas"]:
             necesarios[p["event_id"]] = {"partido": p["partido"], "liga": p["liga"],
                                          "inicio": p["inicio"]}
     marcadores = fuente.marcadores(necesarios)
     print(f"  resultados encontrados: {len(marcadores)} de {len(necesarios)} partidos")
 
     liquidados = 0
-    for idx, fila in pendientes.iterrows():
-        patas = json.loads(fila["patas_json"])
-        r = liquidar_ticket(patas, marcadores)
+    for fila in filas:
+        if fila["estado"] != "pendiente":
+            continue
+        r = liquidar_ticket(fila["patas"], marcadores)
         if r is None:
             continue
-        df.at[idx, "estado"] = "liquidado"
-        df.at[idx, "pago"] = r["pago"]
-        df.at[idx, "retorno"] = r["retorno"] * fila["importe"]
+        fila["estado"] = "liquidado"
+        fila["liquidado_en"] = ahora()
+        fila["pago"] = r["pago"]
+        fila["retorno"] = round(r["retorno"] * fila["importe"], 4)
         liquidados += 1
 
-    df.to_parquet(libro, index=False, compression="zstd")
-    return {"pendientes": int(len(pendientes)), "liquidados": liquidados,
-            "siguen_pendientes": int(len(pendientes)) - liquidados}
+    if liquidados:
+        escribir_libro(libro, filas)
+    return {"pendientes": len(pendientes), "liquidados": liquidados,
+            "siguen_pendientes": len(pendientes) - liquidados}
 
 
 def resumen(libro: str) -> Dict[str, Any]:
     """La unica cifra que importa: ROI real frente a EV prometido."""
-    if pd is None or not os.path.exists(libro):
-        raise SystemExit(f"No hay libro en {libro}")
-    df = pd.read_parquet(libro)
-    liq = df[df["estado"] == "liquidado"]
+    filas = leer_libro(libro)
+    liq = [f for f in filas if f["estado"] == "liquidado"]
     salida: Dict[str, Any] = {
-        "tickets_registrados": int(len(df)),
-        "liquidados": int(len(liq)),
-        "pendientes": int((df["estado"] == "pendiente").sum()),
+        "tickets_registrados": len(filas),
+        "liquidados": len(liq),
+        "pendientes": sum(1 for f in filas if f["estado"] == "pendiente"),
     }
-    if liq.empty:
+    if not liq:
         salida["lectura"] = ("Aun no hay tickets liquidados. El ROI real solo existe "
                              "cuando se juegan los partidos: no hay atajo.")
         return salida
 
-    importe = float(liq["importe"].sum())
-    retorno = float(liq["retorno"].sum())
+    importe = sum(f["importe"] for f in liq)
+    retorno = sum(f["retorno"] for f in liq)
     roi = retorno / importe if importe else 0.0
-    ev_medio = float(liq["ev_prometido"].mean())
-    aciertos = int((liq["pago"] > 1.0).sum())
+    ev_medio = sum(f["ev_prometido"] for f in liq) / len(liq)
+    aciertos = sum(1 for f in liq if f["pago"] > 1.0)
+
     # Error estandar del ROI: sin el, 10 tickets no dicen nada.
-    ee = float(liq["retorno"].std(ddof=1) / (len(liq) ** 0.5)) if len(liq) > 1 else float("nan")
+    ee = float("nan")
+    if len(liq) > 1:
+        media = retorno / len(liq)
+        var = sum((f["retorno"] - media) ** 2 for f in liq) / (len(liq) - 1)
+        ee = math.sqrt(var) / math.sqrt(len(liq))
 
     salida.update({
         "importe_arriesgado": round(importe, 2),
@@ -171,7 +203,8 @@ def resumen(libro: str) -> Dict[str, Any]:
         "diferencia_pct": round((roi - ev_medio) * 100, 2),
         "tickets_acertados": aciertos,
         "tasa_de_acierto_pct": round(aciertos / len(liq) * 100, 2),
-        "prob_media_del_modelo_pct": round(float(liq["prob_modelo"].mean()) * 100, 2),
+        "prob_media_del_modelo_pct": round(
+            sum(f["prob_modelo"] for f in liq) / len(liq) * 100, 2),
         "error_estandar_roi_pct": round(ee * 100, 2) if ee == ee else None,
         "ic95_roi_pct": ([round((roi - 1.96 * ee) * 100, 2), round((roi + 1.96 * ee) * 100, 2)]
                          if ee == ee else None),

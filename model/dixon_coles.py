@@ -232,3 +232,50 @@ def partidos_de_primera_parte(partidos: Sequence[dict]) -> List[dict]:
             continue
         salida.append(dict(p, y_goles_local=int(gl), y_goles_visitante=int(gv)))
     return salida
+
+
+def partidos_de_segunda_parte(partidos: Sequence[dict]) -> List[dict]:
+    """Reetiqueta con los goles de la SEGUNDA parte: total menos descanso.
+
+    Mismo modelo, otra etiqueta. Hasta ahora estos mercados se descartaban —un
+    5% del catalogo de Betplay— porque no habia con que valorarlos, y descartar
+    era lo correcto: valorarlos con el modelo del partido completo daba
+    probabilidades infladas.
+
+    Se marcan algo mas goles en la segunda parte que en la primera (los equipos
+    se abren, entran cambios), asi que el ajuste sale distinto del de la primera
+    y no vale reutilizarlo.
+    """
+    salida: List[dict] = []
+    for p in partidos:
+        gl_total = p.get("y_goles_local")
+        gv_total = p.get("y_goles_visitante")
+        gl_ht = p.get("y_goles_local_ht", p.get("goles_local_ht"))
+        gv_ht = p.get("y_goles_visitante_ht", p.get("goles_visitante_ht"))
+        if any(v is None or v != v for v in (gl_total, gv_total, gl_ht, gv_ht)):
+            continue
+        gl, gv = int(gl_total) - int(gl_ht), int(gv_total) - int(gv_ht)
+        if gl < 0 or gv < 0:
+            continue     # marcador incoherente: se descarta en vez de corregirlo
+        salida.append(dict(p, y_goles_local=gl, y_goles_visitante=gv))
+    return salida
+
+
+def media_de_corners(partidos: Sequence[dict], equipo: Optional[str] = None,
+                     por_defecto: float = 10.2) -> float:
+    """Media de corners por partido, para el modelo de conteo.
+
+    Es deliberadamente simple —una media, no un modelo por equipo— porque los
+    corners estan correlacionados con el dominio del partido y modelarlos aparte
+    ya es una aproximacion. Afinar la media de un modelo que ignora esa
+    correlacion seria pulir la pieza equivocada.
+    """
+    valores = []
+    for p in partidos:
+        cl, cv = p.get("corners_local"), p.get("corners_visitante")
+        if cl is None or cv is None or cl != cl or cv != cv:
+            continue
+        if equipo and equipo not in (p.get("equipo_local"), p.get("equipo_visitante")):
+            continue
+        valores.append(float(cl) + float(cv))
+    return sum(valores) / len(valores) if len(valores) >= 30 else por_defecto

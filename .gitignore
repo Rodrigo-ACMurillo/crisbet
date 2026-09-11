@@ -17,10 +17,14 @@
 __pycache__/
 *.pyc
 
+# El libro de tickets SÍ va al repositorio: es el historial que valida el
+# sistema y no puede vivir en una caché de CI que caduca a los 7 días.
+!papel/libro/
+!papel/libro/*.jsonl
+
 # Sitio e imágenes generadas (las produce el workflow)
 _sitio/
 **/tickets_png/
-**/libro/
 
 # Datasets del crawler (198 MB)
 crawler/dataset*.jsonl

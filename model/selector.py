@@ -38,9 +38,10 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "matchdata"))
 
-from dixon_coles import DixonColes, partidos_de_primera_parte
+from dixon_coles import (DixonColes, media_de_corners, partidos_de_primera_parte,
+                         partidos_de_segunda_parte)
 from emparejar import Emparejador
-from mercados import MercadosDerivados, Resultado
+from mercados import MercadoDeConteo, MercadosDerivados, Resultado
 
 # Competiciones de Betplay que el modelo sabe valorar, y su codigo interno.
 # La clave lleva el pais porque `liga_key` no es unico en el feed de Kambi.
@@ -120,7 +121,9 @@ def contexto_de_linea(fila: pd.Series) -> Tuple[str, Optional[str]]:
 
 
 def valorar_linea(fila: pd.Series, cat: MercadosDerivados,
-                  cat_ht: Optional[MercadosDerivados]) -> Optional[Resultado]:
+                  cat_ht: Optional[MercadosDerivados] = None,
+                  cat_st: Optional[MercadosDerivados] = None,
+                  corners: Optional[MercadoDeConteo] = None) -> Optional[Resultado]:
     """Devuelve la valoracion del modelo para una linea concreta de Betplay.
 
     None cuando el mercado no esta cubierto. Devolver None es la respuesta
@@ -132,12 +135,22 @@ def valorar_linea(fila: pd.Series, cat: MercadosDerivados,
     linea = float(linea) if linea is not None and not pd.isna(linea) else None
 
     periodo = periodo_del_mercado(m)
-    if periodo == "segunda":
-        return None            # no hay modelo de segunda parte: no se valora
-    if periodo == "primera" and cat_ht is None:
-        return None
-    c = cat_ht if periodo == "primera" else cat
+    c = {"primera": cat_ht, "segunda": cat_st}.get(periodo, cat)
+    if c is None:
+        return None            # sin modelo para ese periodo, no se inventa
     base = quitar_periodo(m)
+
+    # Corners: conteo aparte, no salen de la matriz de marcadores.
+    if "esquina" in base:
+        # Solo el total del partido. El handicap de corners y el "mas corners"
+        # exigirian un modelo POR EQUIPO, y una media global no lo sustituye.
+        if corners is None or linea is None or not base.startswith("total"):
+            return None
+        sel = "mas de" if etiqueta.startswith("mas") else "menos de"
+        for r in corners.total(linea):
+            if _sin_tildes(r.seleccion).lower() == sel:
+                return r
+        return None
 
     def busca(lista: List[Resultado], sel: str) -> Optional[Resultado]:
         for r in lista:
@@ -242,7 +255,9 @@ class Pata:
 def patas_de_evento(cuotas_ev: pd.DataFrame, cat: MercadosDerivados,
                     cat_ht: Optional[MercadosDerivados], meta: Dict[str, Any],
                     ev_minimo: float, cuota_min: float, cuota_max: float,
-                    desvio_maximo: float = 0.06) -> List[Pata]:
+                    desvio_maximo: float = 0.06,
+                    cat_st: Optional[MercadosDerivados] = None,
+                    corners: Optional[MercadoDeConteo] = None) -> List[Pata]:
     """`desvio_maximo` es el guardarrail que da sentido a todo lo demas.
 
     Ordenar las patas por EV y quedarse con las mejores selecciona, por
@@ -261,7 +276,7 @@ def patas_de_evento(cuotas_ev: pd.DataFrame, cat: MercadosDerivados,
         cuota = float(fila["cuota"])
         if not (cuota_min <= cuota <= cuota_max):
             continue
-        r = valorar_linea(fila, cat, cat_ht)
+        r = valorar_linea(fila, cat, cat_ht, cat_st, corners)
         if r is None or r.prob_efectiva <= 0:
             continue
         ev = r.ev(cuota)
@@ -375,17 +390,26 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
             continue
         ref = max(f["kickoff_utc"] for f in filas)
         dc = DixonColes(semivida_dias=args.semivida).fit(filas, fecha_referencia=ref)
-        ht_filas = partidos_de_primera_parte(filas)
-        dc_ht = None
-        if len(ht_filas) >= 300:
+        dc_ht = dc_st = None
+        for etiqueta, reetiquetar in (("ht", partidos_de_primera_parte),
+                                      ("st", partidos_de_segunda_parte)):
+            sub = reetiquetar(filas)
+            if len(sub) < 300:
+                continue
             try:
-                dc_ht = DixonColes(semivida_dias=args.semivida).fit(ht_filas, fecha_referencia=ref)
+                ajuste = DixonColes(semivida_dias=args.semivida).fit(sub, fecha_referencia=ref)
             except ValueError:
-                dc_ht = None
+                continue
+            if etiqueta == "ht":
+                dc_ht = ajuste
+            else:
+                dc_st = ajuste
+        media_corners = media_de_corners(filas)
         emp = Emparejador(set(h["equipo_local"]) | set(h["equipo_visitante"]))
         modelos[liga_modelo] = (dc, dc_ht, emp)
-        print(f"  {liga_modelo}: modelo ajustado sobre {len(filas)} partidos"
-              f"{' (+1a parte)' if dc_ht else ''}")
+        print(f"  {liga_modelo}: {len(filas)} partidos"
+              f"{' +1a' if dc_ht else ''}{' +2a' if dc_st else ''}"
+              f"  corners {media_corners:.1f}/partido")
 
         for ev in grupo.itertuples():
             m_local, m_visit = emp.emparejar(ev.local), emp.emparejar(ev.visitante)
@@ -395,6 +419,9 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
             cat = MercadosDerivados(dc.matriz_marcadores(m_local.slug, m_visit.slug))
             cat_ht = (MercadosDerivados(dc_ht.matriz_marcadores(m_local.slug, m_visit.slug))
                       if dc_ht else None)
+            cat_st = (MercadosDerivados(dc_st.matriz_marcadores(m_local.slug, m_visit.slug))
+                      if dc_st else None)
+            corners = MercadoDeConteo(media_corners)
             sub = cuotas[cuotas["event_id"] == ev.event_id].copy()
             sub["_local"] = ev.local
             sub["_visitante"] = ev.visitante
@@ -402,7 +429,7 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
                     "inicio": ev.inicio_utc}
             todas_las_patas.extend(patas_de_evento(sub, cat, cat_ht, meta, args.ev_minimo,
                                                    args.cuota_min, args.cuota_max,
-                                                   args.desvio_maximo))
+                                                   args.desvio_maximo, cat_st, corners))
             valorados += 1
 
     tickets = construir_tickets(todas_las_patas, args.cuota_objetivo, args.tickets,
